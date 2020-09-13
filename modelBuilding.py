@@ -24,7 +24,9 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Lasso, ElasticNet
 from sklearn.svm import SVR
 from sklearn.pipeline import Pipeline
-
+import xgboost as xgb
+from sklearn.metrics import r2_score
+from sklearn.model_selection import RandomizedSearchCV
 
 df = pd.read_csv('featureSelection.csv')
 
@@ -32,6 +34,10 @@ X_test = df.loc[df.SalePrice_log.isna()].copy()
 train_df = df.loc[~df.SalePrice_log.isna()].copy()
 
 X_test.drop('SalePrice_log', axis = 1, inplace = True)
+hid = X_test.Id
+train_df.drop('Id', axis = 1, inplace = True)
+X_test.drop('Id', axis = 1, inplace = True)
+
 
 y_train = train_df.SalePrice_log.values
 X_train = train_df.drop('SalePrice_log', axis = 1)
@@ -40,24 +46,26 @@ X_train = train_df.drop('SalePrice_log', axis = 1)
 As found in capstone project
 https://github.com/sfjep/IBM_Course_CapstoneProject/blob/master/CapstoneProject%20-%20Model%20Building.ipynb
 A combination of RF, SVR, and GB is found to be optimal
+SVR does however present poor predictions.
 '''
 
 kfold = KFold(n_splits=10)
-
+RandomizedSearchCV(xg_cl,param,verbose=10)
 # MODEL TUNING FUNCTIONS
 def rfTuning(X_train, y_train, X_test):
     # Optimized at max_depth = 25, n_estimators = 280
     parameters = {
         'n_estimators': range(200, 300, 20), 
-        'max_depth': range(20, 30, 5)
+        'max_depth': range(20, 40, 5),
+        
         }
     
     rf = RandomForestRegressor(criterion = 'mae')
     
     np.random.seed(1)
-    gs_rf = GridSearchCV(rf, parameters, scoring = 'neg_mean_absolute_error', cv = kfold)
+    gs_rf = RandomizedSearchCV(rf, parameters, n_jobs=1, cv=kfold)
     gs_rf.fit(X_train, y_train)
-    rf_pred = np.expm1(gs_rf.best_estimator_.predict(X_train))
+    rf_pred = np.expm1(gs_rf.best_estimator_.predict(X_test))
     print(gs_rf.best_score_)
     print(gs_rf.best_estimator_)
     
@@ -65,14 +73,14 @@ def rfTuning(X_train, y_train, X_test):
 
 
 def gbTuning(X_train, y_train, X_test):
-    parameters = {'learning_rate': [0.005, 0.01, 0.015, 0.02], 
+    parameters = {'learning_rate': [0.01, 0.02, 0.03, 0.05, 0.1], 
                   'n_estimators': range(150, 200, 25)
                   }
     
     gb = GradientBoostingRegressor(loss = 'huber')
     
     np.random.seed(1)
-    gs_gb = GridSearchCV(gb, parameters, scoring = 'neg_mean_absolute_error', cv = kfold)
+    gs_gb = RandomizedSearchCV(gb, parameters, n_jobs=1, cv=kfold)
     gs_gb.fit(X_train, y_train)
     gb_pred = np.expm1(gs_gb.best_estimator_.predict(X_test))
     print(gs_gb.best_score_)
@@ -80,33 +88,52 @@ def gbTuning(X_train, y_train, X_test):
 
     return gb_pred
 
-def svrTuning(X_train, y_train, X_test):
-    # OPTIMZED AT: C = 0.5, kernel = 'linear'
-    parameters = {'C': [0.1, 0.5, 1, 1.5, 2], 
-                  'kernel': ('linear', 'sigmoid', 'rbf', 'poly'),
-                 }
+def xgbRegressor(X_train, y_train, X_test):
     
-    svr = SVR()
+    clf = xgb.XGBRegressor(
+        eval_metric = 'rmse',
+        nthread = 4,
+        eta = 0.1,
+        num_boost_round = 80,
+        subsample = 0.5,
+        silent = 1,
+        )
+    parameters = {
+        'num_boost_round': [10, 25, 50],
+        'eta': [0.05, 0.1, 0.3],
+        'max_depth': [3, 4, 5],
+        'subsample': [0.9, 1.0],
+        'colsample_bytree': [0.9, 1.0],
+        'reg_lambda': [0.1, 1.0, 5.0, 10.0, 50.0, 100.0],
+        'gamma': [0, 0.25, 0.5, 1.0],
+        'max_depth': [6, 10, 15, 20],
+        'learning_rate': [0.001, 0.01, 0.1, 0.2, 0,3],
+        'subsample': [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+        'colsample_bytree': [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+        'colsample_bylevel': [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+        'min_child_weight': [0.5, 1.0, 3.0, 5.0, 7.0, 10.0],
+        'n_estimators': [100]
+        }
+        
+            
+    clf2 = RandomizedSearchCV(clf, parameters, n_jobs=1, cv=kfold)
+    clf2.fit(X_train, y_train)
+    xgb_pred = np.expm1(clf2.predict(X_test))
     
-    np.random.seed(1)
-    gs_svr = GridSearchCV(svr, parameters, scoring = 'neg_mean_absolute_error', cv = kfold)
-    gs_svr.fit(X_train, y_train)
-    svr_pred = np.expm1(gs_svr.best_estimator_.predict(X_test))
-    print(gs_svr.best_score_)
-    print(gs_svr.best_estimator_)
+    return xgb_pred
 
-    return svr_pred
 
 # TUNE
 rf_pred = rfTuning(X_train, y_train, X_test)
 gb_pred = gbTuning(X_train, y_train, X_test)
-svr_pred = svrTuning(X_train, y_train, X_test)
+xgb_pred = xgbRegressor(X_train, y_train, X_test)
 
-comb_pred = (rf_pred + gb_pred + svr_pred) / 3
+
+comb_pred = (2*rf_pred + gb_pred + 4 * xgb_pred) / 7
 
 
 # Submisssions
-hid = X_test.Id
+
 
 def generateSubmissionDf(hid, pred, name):
     submission = pd.DataFrame({
@@ -118,6 +145,7 @@ def generateSubmissionDf(hid, pred, name):
 
 generateSubmissionDf(hid, rf_pred, 'rf')
 generateSubmissionDf(hid, gb_pred, 'gb')
-generateSubmissionDf(hid, svr_pred, 'svr')
+generateSubmissionDf(hid, xgb_pred, 'xgb')
+
 generateSubmissionDf(hid, comb_pred, 'comb')
 
